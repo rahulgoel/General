@@ -1,0 +1,580 @@
+#include <iostream>
+#include <fstream>
+#include <malloc.h>
+#include <string>
+#include <string.h>
+#include <cstdlib>
+#include <cstdio>
+#include <stdio.h>
+#include <unistd.h>
+
+
+using namespace std;
+
+/*
+ *
+ */
+
+
+double p,q;
+int actn = 0;
+
+enum ACTION {
+    H,  //Hit
+    S,  //Stand
+    D,  //Double
+    P   //Split
+};
+
+
+struct MDP_State {
+    int minSum;
+    int numAces;
+    int dealerMinSum;
+    int dealerNumAces;
+    int numCards;
+    bool isBlackJack;
+    int pair; // zero to ten, zero for no pair
+    bool turn;
+};
+typedef struct MDP_State STATE;
+
+
+double DWinProb(STATE st);
+double PWinProb(STATE st);
+double TieProb(STATE st);
+double ValueItr(STATE s);
+double QValue(STATE s, ACTION a);
+int computeSum(STATE s);
+
+
+struct tup {
+    double Vstar;
+    int action;
+    bool flag;
+};
+struct tup LookUpTable[33][10];
+
+STATE initialiseState(int a, int b, int c, int d, int e, bool f, int g, bool h)
+{
+    STATE so;
+    so.minSum = a;
+    so.numAces = b;
+    so.dealerMinSum = c;
+    so.dealerNumAces = d;
+    so.numCards = e;
+    so.isBlackJack = f;
+    so.pair = g;
+    so.turn = h;
+    return so;
+}
+
+
+int LookUpIndex(STATE s)
+{
+    int index = 0;
+
+    if(s.minSum>19 && s.pair==0) return -1;
+
+    if(s.pair==0) {
+        if (s.numAces == 0) {
+            index = s.minSum - 5;
+        }
+        else {
+            if(computeSum(s)!=s.minSum) {
+                if(s.minSum<=10)
+                    index = 12 + s.minSum;
+                else return -1;
+            }
+            else {
+                index = s.minSum - 5;
+            }
+        }
+    }
+    else {
+        if(s.numCards==2) {
+            index = 21+s.pair;
+            if(s.numAces!=0) index = index+10;
+        }
+        else {
+            if (s.numAces == 0)
+                index = s.minSum - 5;
+            else
+                index = 12 + s.minSum;
+        }
+    }
+    return index;
+}
+
+int LookupD(STATE s)
+{
+    int index = 0;
+    if(s.dealerMinSum == 1) return 9;
+    return (s.dealerMinSum-2);
+}
+
+
+void updateLookUpTable(STATE s, double EReward, int a)
+{
+    if(LookUpIndex(s)>=0){
+        bool ltf = LookUpTable[LookUpIndex(s)][LookupD(s)].flag;
+        if(!ltf) {
+            LookUpTable[LookUpIndex(s)][LookupD(s)].Vstar = EReward;
+            LookUpTable[LookUpIndex(s)][LookupD(s)].action = a;
+            LookUpTable[LookUpIndex(s)][LookupD(s)].flag = true;
+        }
+    }
+}
+
+int computeSum(STATE s)
+{
+    int n, na, t1;
+    na = s.numAces;
+
+    if(na != 0) {
+        if(s.minSum <= 11) return (10+s.minSum);
+    }
+    return s.minSum;
+}
+
+
+int computeDealerSum(STATE s)
+{
+    int n, na, t1;
+    na = s.dealerNumAces;
+
+    if(na != 0) {
+        if(s.dealerMinSum <= 11) return (10+s.dealerMinSum);
+    }
+    return s.dealerMinSum;
+}
+
+
+STATE updateState(STATE s, int i)
+{
+    STATE tmp = s;
+
+    if(s.numCards==1 && s.minSum==i && i!=1) tmp.pair = i;
+    else tmp.pair = 0;
+
+    tmp.minSum = s.minSum + i;
+    if(computeSum(tmp) /*tmp.minSum*/ > 21) tmp.turn = false;
+
+    if(i==1) tmp.numAces = s.numAces + 1;
+
+    tmp.numCards = s.numCards + 1;
+
+    /*int tmpSum = computeSum(tmp);
+    if(tmpSum >= 16) {
+        tmp.turn = false;
+    }*/
+
+    return tmp;
+}
+
+
+pair<STATE, STATE> updateSplit(STATE s)
+{
+    STATE tmp1, tmp2;
+    int pr = s.pair;
+    tmp1 = s;
+    tmp2 = s;
+    if(s.numCards == 2) {
+        tmp1.pair = 0;
+        tmp2.pair = 0;
+        tmp1.numCards = 1;
+        tmp2.numCards = 1;
+        tmp1.minSum = s.minSum - pr;
+        tmp2.minSum = s.minSum - pr;
+        if(pr==1) {
+            tmp1.numAces = 1;
+            tmp2.numAces = 1;
+            tmp1.turn = false;
+            tmp2.turn = false;
+        }
+    }
+    return make_pair(tmp1, tmp2);
+}
+
+
+STATE updateDealerSum(STATE s, int i){
+    STATE tmp = s;
+    tmp.dealerMinSum = s.dealerMinSum + i;
+    if(i==1) tmp.dealerNumAces = s.dealerNumAces + 1;
+    return tmp;
+}
+
+
+double prob(int i){
+    if(i==10) return p;
+    else return ((1.0 - p)/9.0);
+}
+
+
+double PWinProbForI(STATE s, int i)
+{
+    STATE temp;
+    double tmpProbI = 0.0;
+
+    temp=updateDealerSum(s,i);
+    int Dsum = computeDealerSum(temp);
+    int AIsum = computeSum(temp);
+    if(Dsum/*temp.dealerMinSum*/ >= 17 ){
+        if(Dsum/*temp.dealerMinSum*/ <= 21) {
+            if(Dsum/*temp.dealerMinSum*/ < AIsum/*temp.minSum*/) {
+                tmpProbI = prob(i);
+            }
+        }
+        else{
+            tmpProbI = prob(i);
+        }
+    }
+    else{
+        tmpProbI = prob(i) * PWinProb(temp);
+    }
+
+    return tmpProbI;
+}
+
+
+double DWinProbForI(STATE s, int i)
+{
+
+    STATE temp;
+    double tmpProbI = 0.0;
+
+    temp=updateDealerSum(s,i);
+    int Dsum = computeDealerSum(temp);
+    int AIsum = computeSum(temp);
+    bool DstopHit = false;
+
+    /*if(Dsum >= 17) {
+        if(temp.dealerNumAces!=0 && Dsum==17) DstopHit = false;
+        else DstopHit = true;
+    }*/
+
+    //if(DstopHit){
+    if(Dsum >= 17) {
+        if(Dsum/*temp.dealerMinSum*/ <= 21) {
+            if(Dsum/*temp.dealerMinSum*/ > AIsum/*temp.minSum*/) {
+                tmpProbI = prob(i);
+            }
+        }
+    }
+    else{
+        tmpProbI = prob(i) * DWinProb(temp);
+    }
+
+    return tmpProbI;
+}
+
+
+double DWinProb(STATE st)
+{
+    double tmp = 0.0;
+    int AIsum = computeSum(st);
+    if(!st.isBlackJack) {
+        if(AIsum/*st.minSum*/ == 21) {
+            if(st.dealerMinSum == 1 && st.dealerNumAces == 1) tmp = p;
+            if(st.dealerMinSum == 10) tmp = q;
+            return tmp;
+        }
+    }
+
+    if(AIsum > 21) return 1;
+
+    for(int j=1; j<=10; j++) {
+        tmp = tmp + DWinProbForI(st, j);
+    }
+
+    return tmp;
+}
+
+
+double D_BJ_Prob(STATE st)
+{
+    double tmp = 0.0;
+    if(st.dealerMinSum == 1 && st.dealerNumAces == 1) tmp = p;
+    if(st.dealerMinSum == 10) tmp = q;
+    return tmp;
+}
+
+
+double PWinProb(STATE st)
+{
+    double tmp = 0.0, tmp2 = 0.0;
+    int AIsum = computeSum(st);
+    if(st.isBlackJack) {
+        /*if(st.dealerMinSum == 1 && st.dealerNumAces == 1) tmp = 1.0-p;
+        else if(st.dealerMinSum == 10) tmp = 1.0-q;
+        else tmp = 1.0;
+        return tmp;*/
+        return (1.0-D_BJ_Prob(st));
+    }
+    else{
+        if(AIsum/*st.minSum*/ == 21) tmp2 = D_BJ_Prob(st);
+    }
+
+    if(AIsum > 21) return 0;
+
+    for(int j=1; j<=10; j++) {
+        tmp = tmp + PWinProbForI(st, j);
+    }
+    return tmp-tmp2;
+}
+
+
+double TieProb(STATE st)
+{
+    return (1.0-PWinProb(st)-DWinProb(st));
+}
+
+
+pair<double,int> maxValue(double a, double b, double c, double d)
+{
+    double temp1 = a, temp2 = c;
+    //cout << "max  " << a << " " << b << " " << c << " " << d << endl;
+
+    if(a < b) temp1 = b;
+
+    if(d==0) {
+        double rt = (temp1>temp2 ? temp1 : temp2) ;
+        int at = 0;
+        if(rt == b) at = 1;
+        if(rt == a) at = 0;
+        if(rt == c) at = 2;
+        return make_pair(rt,at);
+    }
+
+    if(c < d) temp2 = d;
+
+    double ret = (temp1>temp2 ? temp1 : temp2) ;
+    int act = 0;
+    if(ret == a) act = 0;
+    else if(ret == b) act = 1;
+    else if(ret == c) act = 2;
+    else act = 3;
+    return make_pair(ret, act);
+    //return ret;
+}
+
+
+double splitValue(STATE s)
+{
+    STATE tmp = s;
+    int pr = s.pair;
+    double temp = 0.0, lte = 0.0;
+    bool ltflag;
+
+    if(pr!=0 && s.numCards==2) {
+        pair<STATE,STATE> tp = updateSplit(tmp);
+        STATE ss = tp.first;
+
+        if(pr==1) {
+            temp = 2*QValue(ss,H);
+            return temp;
+        }
+
+        for(int i=1; i<=10; i++) {
+            if(i!=pr) {
+                ss = updateState(tp.first, i);
+                int ind = LookUpIndex(ss);
+                if(ind>=0) {
+                    lte = LookUpTable[ind][LookupD(ss)].Vstar;
+                    ltflag = LookUpTable[ind][LookupD(ss)].flag;
+                    if(ltflag)
+                        temp = temp + (prob(i) * lte);
+                    else
+                        temp = temp + (prob(i) * (ValueItr(ss))) ;
+                }
+                else {
+                    temp = temp + (prob(i) * (ValueItr(ss))) ;
+                }
+            }
+        }
+    }
+    double fr = 1.0 - 2*prob(pr);
+    return 2*temp/fr;
+}
+
+
+double QValue(STATE s, ACTION a)
+{
+    double tmp = 0.0, lte = 0.0;
+    bool ltflag;
+    STATE temp = s;
+    //cout << "qvalue for action " << a << endl;
+
+    if(a==S) {
+        temp.turn = false;
+        tmp = ValueItr(temp);
+        return tmp;
+    }
+    if(a==P) {
+        return splitValue(s);
+    }
+
+
+    for(int i=1; i<=10; i++){
+        if(a==H) {
+            temp = updateState(s,i);
+            int ind = LookUpIndex(temp);
+            if(ind>=0) {
+                lte = LookUpTable[ind/*LookUpIndex(temp)*/][LookupD(temp)].Vstar;
+                ltflag = LookUpTable[ind/*LookUpIndex(temp)*/][LookupD(temp)].flag;
+                if(ltflag)
+                    tmp = tmp + (prob(i)*lte);
+                else
+                    tmp = tmp + (prob(i) * (1 * ValueItr(temp)));
+            }
+            else {
+                tmp = tmp + (prob(i) * (1 * ValueItr(temp)));
+            }
+
+        }
+
+        if(a==D) {
+            temp = updateState(s,i);
+            temp.turn = false;
+            tmp = tmp + (prob(i) * (2 * ValueItr(temp)));
+        }
+
+    }
+    return tmp;
+}
+
+
+double ValueItr(STATE s)
+{
+    if(!s.turn) {
+        double lval = PWinProb(s)-DWinProb(s);
+        return lval;
+    }
+
+    pair<double,int> tup = maxValue(QValue(s,H), QValue(s,S), QValue(s,D), QValue(s,P));
+    actn = tup.second;
+
+    updateLookUpTable(s,tup.first,tup.second);
+    return (tup.first);
+    //return maxValue(QValue(s,H), QValue(s,S), QValue(s,D), QValue(s,P));
+}
+
+
+char outAction(int i)
+{
+    if(i==0) return 'H';
+    else if(i==1) return 'S';
+    else if(i==2) return 'D';
+    else if(i==3) return 'P';
+    else return '\0';
+    return '\0';
+}
+
+
+void OutStrategy()
+{
+    STATE s;
+
+    s = initialiseState(0,0,0,0,2,false,0,true);
+    for(int i=5; i<=19; i++) {
+        s.minSum = i;
+        cout << i << "\t";
+        for(int j=2; j<=11; j++) {
+            if(j!=11) {
+                s.dealerMinSum = j;
+            }
+            else {
+                s.dealerMinSum = 1;
+                s.dealerNumAces = 1;
+            }
+
+            ValueItr(s);
+            cout << outAction(actn) << " ";
+            s.dealerNumAces = 0;
+        }
+        cout << endl;
+    }
+
+    s = initialiseState(0,1,0,0,2,false,0,true);
+    for(int i=2; i<=9; i++) {
+        s.minSum = 1+i;
+        cout << "A" << i << "\t";
+        for(int j=2; j<=11; j++) {
+            if(j!=11) {
+                s.dealerMinSum = j;
+            }
+            else {
+                s.dealerMinSum = 1;
+                s.dealerNumAces = 1;
+            }
+            ValueItr(s);
+            cout << outAction(actn) << " ";
+            s.dealerNumAces = 0;
+        }
+        cout << endl;
+    }
+
+    s = initialiseState(0,0,0,0,2,false,0,true);
+    for(int i=2; i<=10; i++) {
+        s.pair = i;
+        s.minSum = 2*i;
+        cout << i << i << "\t";
+        for(int j=2; j<=11; j++) {
+            if(j!=11) {
+                s.dealerMinSum = j;
+            }
+            else {
+                s.dealerMinSum = 1;
+                s.dealerNumAces = 1;
+            }
+            ValueItr(s);
+            cout << outAction(actn) << " ";
+            s.dealerNumAces = 0;
+        }
+        cout << endl;
+    }
+
+    s = initialiseState(2,2,0,0,2,false,1,true);
+    cout << "AA\t" ;
+    for(int j=2; j<=11; j++) {
+        if(j!=11) {
+            s.dealerMinSum = j;
+        }
+        else {
+            s.dealerMinSum = 1;
+            s.dealerNumAces = 1;
+        }
+        ValueItr(s);
+        cout << outAction(actn) << " ";
+        s.dealerNumAces = 0;
+    }
+    cout << endl;
+}
+
+
+int main(int argc, char** argv) {
+
+    if(argc == 2) {
+        p = atof(argv[1]);
+    }
+    else {
+        p = 4.0/13.0;
+    }
+    q = (1.0-p)/9.0;
+
+    OutStrategy();
+
+    /*
+    for(int i=0;i<33;i++){
+        cout << i << "\t";
+        for(int j=0;j<10;j++) {
+            cout << outAction(LookUpTable[i][j].action) << " ";
+        }
+        cout << endl;
+    }
+    */
+
+
+    return 0;
+}
+
